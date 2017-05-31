@@ -29,10 +29,19 @@ data Card
 data Player = Player
     { _playerName :: String
     , _playerCard :: Maybe Card
+    , _playerProtected :: Bool
     }
     deriving (Show, Eq, Ord)
 
 $(makeFields ''Player)
+
+data Round = Round
+    { _roundNumber :: Int
+    , _roundLosers :: [Player]
+    , _roundPlayers :: NonEmpty Player
+    } deriving (Show, Eq)
+
+$(makeFields ''Round)
 
 -- Another way to do this: have an indexed data structure
 -- and a list of indices to cycle through to determine players
@@ -41,7 +50,7 @@ data LoveLetter = LoveLetter
     , _loveLetterPlayers        :: NonEmpty Player
     -- ^ current player is at the head of the list.
     , _loveLetterDiscardedCards :: [Card]
-    , _loveLetterRound          :: Int
+    , _loveLetterRound          :: Round
     , _loveLetterRNG            :: StdGen
     } deriving (Show)
 
@@ -58,7 +67,7 @@ currentPlayer = players . _nelHead
 -- index lens would be good
 
 mkPlayer :: String -> Player
-mkPlayer playerName = Player playerName Nothing
+mkPlayer playerName = Player playerName Nothing False
 
 -- Map over a player indexed by their name
 mapPlayer :: String -> (Player -> Player) -> NonEmpty Player -> NonEmpty Player

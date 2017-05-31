@@ -1,0 +1,36 @@
+name:                game-encoding
+version:             0.1.0.0
+#synopsis:
+#description:
+homepage:            https://github.com/githubuser/game-encoding#readme
+license:             BSD3
+author:              Author name here
+maintainer:          example@example.com
+copyright:           2017 Author name here
+category:            Web
+extra-source-files:
+- README.md
+
+dependencies:
+  - base >= 4.7 && < 5
+  - mtl
+  - transformers
+  - lens
+  - monad-loops
+  - extra
+  - random-fu
+  - random
+  - containers
+  - unordered-containers
+  - hashable
+  - semigroups
+  - lens
+
+default-extensions:
+  - RecordWildCards
+  - LambdaCase
+
+executables:
+  game-encoding:
+    source-dirs:      src
+    main:             Main.hs

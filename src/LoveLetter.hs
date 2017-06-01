@@ -416,7 +416,7 @@ lose = do
     knockOut currentPlayer'
 
 declareRoundWinner :: LoveLetterM m => Player -> m ()
-declareRoundWinner = fire . RoundWinnerAnnounced
+declareRoundWinner = fire . RoundWonB
 
 showFinalScore :: NEL.NonEmpty Player -> IO ()
 showFinalScore ps = forM_ (NEL.sortBy (comparing (negate . _playerTokens)) ps) $ \p ->
@@ -452,9 +452,8 @@ loveLetter = do
             loveLetter
 
 data LoveLetterEvent
-    =
-      RoundBegins Round
-    | RoundWinnerAnnounced Player
+    = RoundBegins Round
+    | RoundWonBy Player
     | GameWinnerAnnounced Player
     | PlayerKnockedOut Player (NEL.NonEmpty Player)
     | CardGuess
@@ -474,7 +473,7 @@ fire e = mapM_ ($e) handlers
 
 playerHandler :: LoveLetterM m => LoveLetterEvent -> m ()
 playerHandler = \case
-    RoundWinnerAnnounced winner ->
+    RoundWonBy winner ->
         modifyGlobalPlayer winner (tokens +~ 1)
     PlayerKnockedOut player _ -> do
         round.players
@@ -495,7 +494,7 @@ loggingHandler = \case
             $ "[DEBUG] Current Players: "
             <> show (round ^. players)
         
-    RoundWinnerAnnounced winner -> putStrLn $ "The winner of this round is " 
+    RoundWonBy winner -> putStrLn $ "The winner of this round is " 
         <> winner ^. name
         <> " with a "
         <> showHand (winner ^. card)

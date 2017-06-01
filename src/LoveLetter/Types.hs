@@ -12,6 +12,7 @@ import           Control.Lens
 import           Control.Lens.TH
 import           Data.List.NonEmpty         (NonEmpty (..))
 import qualified Data.List.NonEmpty         as NEL
+import           Prelude                    hiding (round)
 import           System.Random              (StdGen, newStdGen)
 
 import           Control.Monad.State.Strict
@@ -51,10 +52,10 @@ $(makeFields ''Round)
 -- Another way to do this: have an indexed data structure
 -- and a list of indices to cycle through to determine players
 data LoveLetter = LoveLetter
-    { _loveLetterPlayers :: NonEmpty Player
+    { _loveLetterGlobalPlayers :: NonEmpty Player
     -- ^ current player is at the head of the list.
-    , _loveLetterRound   :: Round
-    , _loveLetterRNG     :: StdGen
+    , _loveLetterRound         :: Round
+    , _loveLetterRNG           :: StdGen
     } deriving (Show)
 
 $(makeFields ''LoveLetter)
@@ -69,7 +70,7 @@ _nelHead :: Lens' (NonEmpty a) a
 _nelHead f (a :| as) = (:| as) <$> f a
 
 currentPlayer :: Lens' LoveLetter Player
-currentPlayer = players . _nelHead
+currentPlayer = round.players . _nelHead
 
 -- index lens would be good
 

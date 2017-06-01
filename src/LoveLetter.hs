@@ -42,22 +42,14 @@ showHand = \case
 -- | Get the next Player and cycle the turn.
 nextPlayer :: LoveLetterM m => m (Maybe Player)
 nextPlayer = do
-    p :| xs <- use players
+    p :| xs <- use (round.players)
     case xs of
         [] -> pure Nothing
         (player':xs') ->
             let newPlayers = player' :| (xs' ++ [p])
             in do
-                players .= newPlayers
+                round.players .= newPlayers
                 pure $ Just player'
-
--- Put current player last and a new player first
-setCurrentPlayer :: LoveLetterM m => Player -> m Player
-setCurrentPlayer p = do
-    p' :| xs <- use players
-    players .= p :| (filter (/= p) xs) ++ [p']
-    pure p
-{-# ANN setCurrentPlayer "HLint: ignore" #-}
 
 runLoveLetter :: s -> StateT s m a -> m (a, s)
 runLoveLetter = flip runStateT
@@ -103,9 +95,6 @@ emptyDeckWinner :: LoveLetterM m => m (Maybe Player)
 emptyDeckWinner = do
     roundDeck <- use $ round.deck
 
-    liftIO $ print "GOT EMPTY DECK WINNER:"
-    get >>= liftIO . print
-
     case length roundDeck of
         0 -> do
             roundPlayers <- use $ round.players
@@ -126,9 +115,6 @@ emptyDeckWinner = do
 allEliminatedWinner :: LoveLetterM m => m (Maybe Player)
 allEliminatedWinner = do
     players' <- use $ round.players
-
-    liftIO $ print "GOT ALL ELIMINATED WINNER:"
-    get >>= liftIO . print
 
     pure $ case players' of
         p :| [] -> Just p
@@ -151,6 +137,7 @@ shuffleCards :: LoveLetterM m => m ()
 shuffleCards = do
     deck' <- rng (shuffle unshuffledDeck)
     round.deck .= deck'
+    liftIO $ putStr "[SECRET] Deck: "
     liftIO $ print deck'
 
 removeTopCard :: LoveLetterM m => m ()
@@ -158,6 +145,7 @@ removeTopCard = do
     (card:deck') <- use $ round.deck
     round.discardedCards %= (card:)
     round.deck .= deck'
+    liftIO . putStrLn $ "A " <> show card <> " card is face-up on the table."
 
 emptyDeck :: LoveLetterM m => m Bool
 emptyDeck = null <$> use (round.deck)
@@ -171,12 +159,11 @@ roundIsWon :: LoveLetterM m => m Bool
 roundIsWon = do
     deckIsEmpty <- emptyDeck
     onePlayerRemains <- oneRemainingPlayer
-    liftIO . print $ (deckIsEmpty, onePlayerRemains)
     return (deckIsEmpty || onePlayerRemains)
 
 -- TODO: Does not match spec
 pickStartPlayer :: LoveLetterM m => m Player
-pickStartPlayer = rng . randomElement =<< use (players.to NEL.tail)
+pickStartPlayer = rng . randomElement =<< use (globalPlayers.to NEL.tail)
 
 startingWith :: NEL.NonEmpty Player -> Player -> NEL.NonEmpty Player
 ps `startingWith` p =
@@ -186,8 +173,14 @@ ps `startingWith` p =
 playRound :: LoveLetterM m => m ()
 playRound = do
     round.number += 1
+    roundNumber <- use $ round.number
 
-    loveLetterPlayers <- use players
+    liftIO . putStrLn $ "######## ROUND " <> show roundNumber <> " ########"
+
+    loveLetterPlayers <- use globalPlayers
+    startPlayer <- pickStartPlayer
+
+    round.players .= loveLetterPlayers `startingWith` startPlayer
 
     let playerCount = NEL.length loveLetterPlayers
 
@@ -198,17 +191,10 @@ playRound = do
         replicateM_ 3 removeTopCard
 
     -- TODO This is a little weird, I'd like a pointer to `p`
-    forM_ loveLetterPlayers $ \p -> do
+    use (round.players) >>= \players' -> forM_ players' $ \p -> do
         drawnCard <- drawCard
         currentPlayer.card .= Just drawnCard
-        get >>= liftIO . print
         nextPlayer
-
-    startPlayer <- pickStartPlayer
-
-    loveLetterPlayers' <- use players
-
-    round.players .= loveLetterPlayers' `startingWith` startPlayer
 
     (playTurn >> nextPlayer) `untilM` roundIsWon
 
@@ -224,7 +210,7 @@ playTurn = do
 
     pName <- use $ currentPlayer.name
 
-    liftIO . putStrLn $ "~~~~~~~~ " <> pName <> "'s turn ~~~~~~~"
+    liftIO . putStrLn $ "~~~~~~~~       " <> pName <> "'s turn       ~~~~~~~"
 
     drawnCard <- drawCard
     (chosenCard, otherCard) <- chooseCardRandomly drawnCard (player ^. card)
@@ -239,6 +225,9 @@ playTurn = do
 
     player `discards` chosenCard
 
+    -- Some space
+    liftIO $ putStrLn ""
+
 renderDiscardedCard :: Player -> Card -> IO ()
 renderDiscardedCard player card = do
     putStrLn $ player ^. name <> " discarded a " <> show card <> " card."
@@ -249,16 +238,32 @@ drawCard :: LoveLetterM m => m Card
 drawCard = do
     (card':_) <- use $ round.deck
     round.deck %= tail
-    -- use deck >>= (liftIO . print . length)
+
+    currentPlayer' <- use currentPlayer
+    liftIO . putStrLn $ "[SECRET] "
+        <> currentPlayer' ^. name
+        <> " drew card "
+        <> show card'
+        <> "."
+
     pure card'
 
 -- Choose a card completely randomly
 chooseCardRandomly :: LoveLetterM m => Card -> Maybe Card -> m (Card, Maybe Card)
-chooseCardRandomly c1 mc2 = case mc2 of
-    Nothing -> pure (c1, Nothing)
-    Just c2 -> do
-        [x,y] <- rng (shuffle [c1, c2])
-        pure (x, Just y)
+chooseCardRandomly c1 mc2 = do
+    currentPlayer' <- use currentPlayer
+    liftIO . putStrLn $ "[SECRET] "
+        <> currentPlayer' ^. name
+        <> " is choosing between "
+        <> show c1
+        <> " (drawn) and "
+        <> showHand mc2
+        <> " (held)."
+    case mc2 of
+        Nothing -> pure (c1, Nothing)
+        Just c2 -> do
+            [x,y] <- rng (shuffle [c1, c2])
+            pure (x, Just y)
 
 -- Forced to discard Countess
 caughtWithCountess :: LoveLetterM m => Player -> m ()
@@ -285,7 +290,7 @@ player `discards` c = do
 
 othersWithoutProtection :: LoveLetterM m => m [Player]
 othersWithoutProtection = do
-    _ :| others <- use players
+    _ :| others <- use $ round.players
     pure $ others ^.. folded . filtered (not . _playerProtected)
 
 chooseAnotherPlayer :: LoveLetterM m => m Player
@@ -322,15 +327,34 @@ knockOut p = do
 
     liftIO . putStrLn $ p ^. name <> " has been knocked out of the round!"
     liftIO . putStrLn $ "Remaining players:"
+
     use (round.players) >>= mapM_ (liftIO . putStrLn . view name)
 
 guessAnotherHand :: LoveLetterM m => m ()
 guessAnotherHand = do
     p <- chooseAnotherPlayer
     guess <- chooseCardGuess
+
+    currentPlayer' <- use currentPlayer
+
+    liftIO . putStrLn $ 
+        currentPlayer' ^. name
+        <> " Guesses that "
+        <> p ^. name
+        <> " has a "
+        <> show guess
+        <> "card."
+
     if guessHand guess p
-        then knockOut p
-        else pure ()
+        then do
+            knockOut p
+            liftIO . putStrLn
+                $ currentPlayer' ^. name
+                <> " was correct!"
+        else
+            liftIO . putStrLn
+                $ currentPlayer' ^. name
+                <> " was wrong!"
 
 viewCard :: LoveLetterM m => Player -> m ()
 viewCard p =
@@ -361,7 +385,7 @@ discardHandWithoutEffect otherPlayer = do
         <> showHand (otherPlayer ^. card)
         <> " without effect."
     -- TODO Track discards
-    players %= mapPlayer (otherPlayer ^. name) (& card .~ Nothing)
+    round.players %= mapPlayer (otherPlayer ^. name) (& card .~ Nothing)
 
 drawNewCard :: LoveLetterM m => Player -> m ()
 drawNewCard p = do
@@ -400,27 +424,52 @@ lose = do
 
 declareRoundWinner :: LoveLetterM m => Player -> m ()
 declareRoundWinner winner = do
-    players %= mapPlayer (winner ^. name) (\player ->
+    -- NOTE this modifies the global reference to the player
+    globalPlayers %= mapPlayer (winner ^. name) (\player ->
         player & tokens +~ 1)
-    liftIO . putStrLn $ "The winner of this round is " <> winner ^. name <> "!"
+    
+    liftIO . putStrLn $ "The winner of this round is " 
+        <> winner ^. name
+        <> " with a "
+        <> showHand (winner ^. card)
+        <> " card"
+        <> "!"
 
-declareWinner = undefined
+showFinalScore :: NEL.NonEmpty Player -> IO ()
+showFinalScore ps = forM_ (NEL.sortBy (comparing (negate . _playerTokens)) ps) $ \p ->
+    putStrLn
+        $ p ^. name
+        <> " has "
+        <> show (p ^. tokens)
+        <> " tokens of affection."
 
-resetEverything = undefined
-
-loveLetter :: LoveLetterM m => m ()
-loveLetter = do
-    players' <- use players
+declareWinner :: LoveLetterM m => m ()
+declareWinner = do
+    players' <- use globalPlayers
     let winThreshold = case length players' of
                         2 -> 7
                         3 -> 5
                         4 -> 4
-    let gameIsWon = any (> winThreshold) $ NEL.map (^. tokens) players'
+    let winner = head $ NEL.filter (\p -> p ^. tokens >= winThreshold) players'
+    liftIO . putStrLn
+        $ "============== WINNER ANNOUNCEMENT: IMPORTANT LISTEN UP ==============="
+    liftIO . putStrLn $ "The winner of the game is "
+        <> winner ^. name
+        <> "! Congratulations!\n"
+    liftIO $ showFinalScore players'
+
+loveLetter :: LoveLetterM m => m ()
+loveLetter = do
+    players' <- use globalPlayers
+    let winThreshold = case length players' of
+                        2 -> 7
+                        3 -> 5
+                        4 -> 4
+    let gameIsWon = any (>= winThreshold) $ NEL.map (^. tokens) players'
     if gameIsWon
-        then pure ()
+        then declareWinner
         else do
             playRound
-            resetEverything
             loveLetter
 
 game :: IO ()

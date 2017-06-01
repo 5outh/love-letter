@@ -90,7 +90,6 @@ handValue p = case p ^. card of
     Nothing -> 0
     Just c -> fromEnum c
 
--- TODO Implement
 emptyDeckWinner :: LoveLetterM m => m (Maybe Player)
 emptyDeckWinner = do
     roundDeck <- use $ round.deck

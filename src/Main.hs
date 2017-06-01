@@ -66,7 +66,6 @@ loveLetter game = if gameWon then pure game else playRound game >>= loveLetter
       3 -> 5
       4 -> 4
     gameWon = any (> winThreshold) $ map (^. playerNumTokens) (game ^. loveLetterPlayers)
-    
 
 effectDescription :: Card -> Description
 effectDescription = \case

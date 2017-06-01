@@ -11,7 +11,7 @@ import           Control.Monad.Extra
 import           Control.Monad.Loops
 import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Maybe
-import           Data.List                  (maximumBy)
+import           Data.List
 import           Data.List.NonEmpty         (NonEmpty (..))
 import qualified Data.List.NonEmpty         as NEL
 import           Data.Monoid
@@ -191,6 +191,11 @@ playRound = do
     -- TODO This is a little weird, I'd like a pointer to `p`
     use (round.players) >>= \players' -> forM_ players' $ \p -> do
         drawnCard <- drawCard
+        liftIO . putStrLn $ "[SECRET] "
+            <> p ^. name
+            <> " drew card "
+            <> show drawnCard
+            <> "."
         modifyPlayer p (card .~ Just drawnCard)
 
     roundPlayers <- use $ round.players
@@ -233,19 +238,10 @@ renderDiscardedCard player card = do
     putStrLn $ player ^. name <> " discarded a " <> show card <> " card."
     putStrLn $ player ^. name <> " " <> discardDescription card
 
--- TODO: Replenish after the round ends!
 drawCard :: LoveLetterM m => m Card
 drawCard = do
     (card':_) <- use $ round.deck
     round.deck %= tail
-
-    currentPlayer' <- use currentPlayer
-    liftIO . putStrLn $ "[SECRET] "
-        <> currentPlayer' ^. name
-        <> " drew card "
-        <> show card'
-        <> "."
-
     pure card'
 
 -- Choose a card completely randomly
@@ -259,11 +255,22 @@ chooseCardRandomly c1 mc2 = do
         <> " (drawn) and "
         <> showHand mc2
         <> " (held)."
+    
     case mc2 of
         Nothing -> pure (c1, Nothing)
-        Just c2 -> do
-            [x,y] <- rng (shuffle [c1, c2])
-            pure (x, Just y)
+        Just c2 ->
+            -- The Countess rule
+            let sorted@[c1', c2'] = sort [c1, c2] in
+                if sorted == [King, Countess] || sorted == [Prince, Countess]
+                    then do
+                        liftIO . putStrLn
+                            $ "[SECRET] "
+                            <> currentPlayer' ^. name
+                            <> " was forced to discard the Countess!"
+                        pure (Countess, Just c1')
+                    else do
+                        [x,y] <- rng (shuffle [c1, c2])
+                        pure (x, Just y)
 
 -- Forced to discard Countess
 caughtWithCountess :: LoveLetterM m => Player -> m ()

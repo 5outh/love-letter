@@ -328,27 +328,9 @@ guessAnotherHand :: LoveLetterM m => m ()
 guessAnotherHand = do
     p <- chooseAnotherPlayer
     guess <- chooseCardGuess
-
     currentPlayer' <- use currentPlayer
 
-    liftIO . putStrLn $ 
-        currentPlayer' ^. name
-        <> " Guesses that "
-        <> p ^. name
-        <> " has a "
-        <> show guess
-        <> "card."
-
-    if guessHand guess p
-        then do
-            knockOut p
-            liftIO . putStrLn
-                $ currentPlayer' ^. name
-                <> " was correct!"
-        else
-            liftIO . putStrLn
-                $ currentPlayer' ^. name
-                <> " was wrong!"
+    fire (CardGuess guess currentPlayer' p)
 
 viewCard :: LoveLetterM m => Player -> m ()
 viewCard p =
@@ -461,6 +443,10 @@ data LoveLetterEvent
     = RoundWinnerAnnounced Player
     | GameWinnerAnnounced Player
     | PlayerKnockedOut Player (NEL.NonEmpty Player)
+    | CardGuess
+        Card
+        Player -- ^ Guesser
+        Player -- ^ Guessee
 
 fire :: LoveLetterM m => LoveLetterEvent -> m ()
 fire e = mapM_ ($e) handlers
@@ -480,6 +466,9 @@ playerHandler = \case
             %= NEL.fromList
             . NEL.filter (\p -> p ^. name /= player ^. name)
         round.losers %= (player:)
+    CardGuess card' guesser guessee ->
+        when (guessee ^. card == Just card')
+            $ knockOut guessee
     _ -> pure ()
 
 loggingHandler :: LoveLetterEvent -> IO ()
@@ -490,16 +479,35 @@ loggingHandler = \case
         <> showHand (winner ^. card)
         <> " card"
         <> "!"
+        
     GameWinnerAnnounced winner -> do
         putStrLn "============== WINNER ANNOUNCEMENT: IMPORTANT LISTEN UP ==============="
         liftIO . putStrLn $ "The winner of the game is "
             <> winner ^. name
             <> "! Congratulations!\n"
+
     PlayerKnockedOut player playersLeft -> do
         liftIO . putStrLn $ player ^. name <> " has been knocked out of the round!"
         liftIO . putStrLn $ "Remaining players:"
 
         mapM_ (liftIO . putStrLn . view name) playersLeft
+
+    CardGuess card guesser guessee -> do
+        putStrLn $ 
+            guesser ^. name
+            <> " guesses that "
+            <> guessee ^. name
+            <> " has a "
+            <> show card
+            <> " card."
+        if guessHand card guessee
+            then putStrLn
+                    $ guesser ^. name
+                    <> " was correct!"
+            else
+                putStrLn
+                    $ guesser ^. name
+                    <> " was wrong!"
 
 game :: IO ()
 game = do

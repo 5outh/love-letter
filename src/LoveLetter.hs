@@ -416,7 +416,7 @@ lose = do
     knockOut currentPlayer'
 
 declareRoundWinner :: LoveLetterM m => Player -> m ()
-declareRoundWinner = fire . RoundWonB
+declareRoundWinner = fire . RoundWonBy
 
 showFinalScore :: NEL.NonEmpty Player -> IO ()
 showFinalScore ps = forM_ (NEL.sortBy (comparing (negate . _playerTokens)) ps) $ \p ->

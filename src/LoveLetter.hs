@@ -4,15 +4,20 @@
 
 module LoveLetter where
 
+import           Control.Applicative
 import           Control.Lens
 import           Control.Monad
 import           Control.Monad.Extra
 import           Control.Monad.Loops
 import           Control.Monad.State.Strict
+import           Control.Monad.Trans.Maybe
+import           Data.List                  (maximumBy)
 import           Data.List.NonEmpty         (NonEmpty (..))
 import qualified Data.List.NonEmpty         as NEL
 import           Data.Monoid
+import           Data.Ord
 import           Data.Random
+import           Debug.Trace
 import           Prelude                    hiding (round)
 import           System.Random              (StdGen, newStdGen)
 
@@ -57,48 +62,105 @@ setCurrentPlayer p = do
 runLoveLetter :: s -> StateT s m a -> m (a, s)
 runLoveLetter = flip runStateT
 
+unshuffledDeck :: [Card]
+unshuffledDeck =
+    [ Princess
+    , Countess
+    , King
+    , Prince, Prince
+    , Handmaid, Handmaid
+    , Baron, Baron
+    , Priest, Priest
+    , Guard, Guard, Guard, Guard, Guard]
+
 initialState :: StdGen -> NEL.NonEmpty Player -> LoveLetter
 initialState gen ps =
     LoveLetter
-        [ Princess
-        , Countess
-        , King
-        , Prince, Prince
-        , Handmaid, Handmaid
-        , Baron, Baron
-        , Priest, Priest
-        , Guard, Guard, Guard, Guard, Guard]
         ps
-        []
-        (Round 0 [] ps)
+        (Round 0 [] ps unshuffledDeck [])
         gen
 
 -- Static for now
 gatherPlayers :: MonadIO m => m (NonEmpty Player)
 gatherPlayers = pure . NEL.fromList $ map mkPlayer ["Ben", "Amanda", "Bozo The Clown"]
 
-gameIsWon = undefined
+whenAlt :: (Alternative f) => f a -> f a -> f a
+whenAlt f go = (f *> go) <|> empty
+
+untilAlt :: (Alternative f) => f a -> f a -> f a
+untilAlt f go = f <|> untilAlt f go
+
+untilAlt_ :: (Alternative f) => f a -> f a -> f ()
+untilAlt_ f = void . untilAlt f
+
+handValue :: Player -> Int
+handValue p = case p ^. card of
+    Nothing -> 0
+    Just c -> fromEnum c
+
+-- TODO Implement
+emptyDeckWinner :: LoveLetterM m => m (Maybe Player)
+emptyDeckWinner = do
+    roundDeck <- use $ round.deck
+
+    liftIO $ print "GOT EMPTY DECK WINNER:"
+    get >>= liftIO . print
+
+    case length roundDeck of
+        0 -> do
+            roundPlayers <- use $ round.players
+
+            let winner = maximumBy (comparing (^. card)) roundPlayers
+            let ties = NEL.filter (\p -> p ^. card == winner ^. card) roundPlayers
+
+            pure . Just $ case length ties of
+                1 -> winner
+                -- TODO what if a tie at this stage?
+                _ -> flip maximumBy roundPlayers $
+                    comparing (\player ->
+                        handValue player
+                        + sum (map fromEnum (player ^. discardedCards))
+                        )
+        _ -> pure Nothing
+
+allEliminatedWinner :: LoveLetterM m => m (Maybe Player)
+allEliminatedWinner = do
+    players' <- use $ round.players
+
+    liftIO $ print "GOT ALL ELIMINATED WINNER:"
+    get >>= liftIO . print
+
+    pure $ case players' of
+        p :| [] -> Just p
+        _       -> Nothing
+
+roundWinner :: LoveLetterM m => m (Maybe Player)
+roundWinner = do
+    emptyDeckWinner' <- emptyDeckWinner
+    allEliminatedWinner' <- allEliminatedWinner
+    pure $ emptyDeckWinner' <|> allEliminatedWinner'
 
 rng :: LoveLetterM m => RVar a -> m a
 rng var = do
-    game@LoveLetter{..} <- get
-    let (r, stdGen') = sampleState var _loveLetterRNG
-    put game{ _loveLetterRNG = stdGen' }
+    rng' <- use rNG
+    let (r, stdGen') = sampleState var rng'
+    rNG .= stdGen'
     pure r
 
 shuffleCards :: LoveLetterM m => m ()
 shuffleCards = do
-    deck <- rng . shuffle =<< gets _loveLetterDeck
-    modify (\g -> g{ _loveLetterDeck = deck })
-    liftIO $ print deck
+    deck' <- rng (shuffle unshuffledDeck)
+    round.deck .= deck'
+    liftIO $ print deck'
 
 removeTopCard :: LoveLetterM m => m ()
 removeTopCard = do
-    (card:deck) <- gets _loveLetterDeck
-    modify (\g -> g{ _loveLetterDeck = deck, _loveLetterDiscardedCards = [card] })
+    (card:deck') <- use $ round.deck
+    round.discardedCards %= (card:)
+    round.deck .= deck'
 
 emptyDeck :: LoveLetterM m => m Bool
-emptyDeck = null <$> use deck
+emptyDeck = null <$> use (round.deck)
 
 oneRemainingPlayer :: LoveLetterM m => m Bool
 oneRemainingPlayer = do
@@ -109,6 +171,7 @@ roundIsWon :: LoveLetterM m => m Bool
 roundIsWon = do
     deckIsEmpty <- emptyDeck
     onePlayerRemains <- oneRemainingPlayer
+    liftIO . print $ (deckIsEmpty, onePlayerRemains)
     return (deckIsEmpty || onePlayerRemains)
 
 -- TODO: Does not match spec
@@ -117,7 +180,8 @@ pickStartPlayer = rng . randomElement =<< use (players.to NEL.tail)
 
 startingWith :: NEL.NonEmpty Player -> Player -> NEL.NonEmpty Player
 ps `startingWith` p =
-    NEL.fromList . cycle $ NEL.dropWhile (/= p) ps
+    NEL.fromList . take len $ NEL.dropWhile (/= p) (NEL.cycle ps)
+    where len = length ps
 
 playRound :: LoveLetterM m => m ()
 playRound = do
@@ -148,7 +212,10 @@ playRound = do
 
     (playTurn >> nextPlayer) `untilM` roundIsWon
 
-    declareRoundWinner
+    mWinner <- roundWinner
+    case mWinner of
+        Nothing -> error "SOMETHING WENT WRONG! THERE SHOULD BE A WINNER."
+        Just winner -> declareRoundWinner winner
 
 playTurn :: LoveLetterM m => m ()
 playTurn = do
@@ -177,11 +244,12 @@ renderDiscardedCard player card = do
     putStrLn $ player ^. name <> " discarded a " <> show card <> " card."
     putStrLn $ player ^. name <> " " <> discardDescription card
 
+-- TODO: Replenish after the round ends!
 drawCard :: LoveLetterM m => m Card
 drawCard = do
-    (card':_) <- use deck
-    deck %= tail
-    use deck >>= (liftIO . print . length)
+    (card':_) <- use $ round.deck
+    round.deck %= tail
+    -- use deck >>= (liftIO . print . length)
     pure card'
 
 -- Choose a card completely randomly
@@ -192,11 +260,12 @@ chooseCardRandomly c1 mc2 = case mc2 of
         [x,y] <- rng (shuffle [c1, c2])
         pure (x, Just y)
 
-endTurn = undefined
-
 -- Forced to discard Countess
 caughtWithCountess :: LoveLetterM m => Player -> m ()
 caughtWithCountess = undefined
+
+modifyPlayer :: LoveLetterM m => Player -> (Player -> Player) -> m ()
+modifyPlayer p f = round.players %= mapPlayer (p ^. name) f
 
 discards :: LoveLetterM m => Player -> Card -> m ()
 player `discards` c = do
@@ -211,6 +280,9 @@ player `discards` c = do
         Countess -> pure () -- "must discard the Countess if caught with King or Prince"
         Princess -> lose
 
+    modifyPlayer player $
+        \p -> p & discardedCards %~ (c:)
+
 othersWithoutProtection :: LoveLetterM m => m [Player]
 othersWithoutProtection = do
     _ :| others <- use players
@@ -221,8 +293,8 @@ chooseAnotherPlayer = do
     others <- othersWithoutProtection
     guess <- case others of
         [] -> use currentPlayer -- "Yourself if possible"
-        _ -> rng (randomElement others)
-    
+        _  -> rng (randomElement others)
+
     pName <- use $ currentPlayer.name
 
     liftIO . putStrLn $ pName <> " chooses " <> guess ^. name <> "!"
@@ -234,7 +306,7 @@ chooseCardGuess :: LoveLetterM m => m Card
 chooseCardGuess = do
     let cardTypes = [minBound..maxBound] :: [Card]
     chosen' <- rng (randomElement cardTypes)
-    
+
     name' <- use $ currentPlayer.name
 
     liftIO . putStrLn $ name' <> " guesses " <> show chosen' <> "!"
@@ -281,24 +353,22 @@ compareHands = do
 grantProtection :: LoveLetterM m => m ()
 grantProtection = currentPlayer.protected .= True
 
-chooseAnyPlayer = undefined
-
 discardHandWithoutEffect :: LoveLetterM m => Player -> m ()
 discardHandWithoutEffect otherPlayer = do
     liftIO . putStrLn
         $ (otherPlayer ^. name)
         <> " discards a "
         <> showHand (otherPlayer ^. card)
-        <> " without effect."    
+        <> " without effect."
     -- TODO Track discards
     players %= mapPlayer (otherPlayer ^. name) (& card .~ Nothing)
-        
+
 drawNewCard :: LoveLetterM m => Player -> m ()
 drawNewCard p = do
-    cardDeck <- use deck
+    cardDeck <- use $ round.deck
     newCard <- case cardDeck of
         [] -> do
-            (x:_) <- use discardedCards
+            (x:_) <- use $ round.discardedCards
             pure x
         (x:_) -> pure x
     roundPlayers <- use $ round.players
@@ -314,10 +384,8 @@ swapHands :: LoveLetterM m => Player -> Player -> m ()
 swapHands p q = do
     let pHand = p ^. card
         qHand = q ^. card
-    roundPlayers <- use $ round.players
-    round.players .= mapPlayer (p ^. name) (& card .~ qHand) roundPlayers
-    roundPlayers' <- use $ round.players
-    round.players .= mapPlayer (q ^. name) (& card .~ pHand) roundPlayers
+    round.players %= mapPlayer (p ^. name) (& card .~ qHand)
+    round.players %= mapPlayer (q ^. name) (& card .~ pHand)
 
 tradeHands :: LoveLetterM m => m ()
 tradeHands = do
@@ -330,20 +398,33 @@ lose = do
     currentPlayer' <- use currentPlayer
     knockOut currentPlayer'
 
-declareRoundWinner = undefined
+declareRoundWinner :: LoveLetterM m => Player -> m ()
+declareRoundWinner winner = do
+    players %= mapPlayer (winner ^. name) (\player ->
+        player & tokens +~ 1)
+    liftIO . putStrLn $ "The winner of this round is " <> winner ^. name <> "!"
 
 declareWinner = undefined
 
-test :: StateT LoveLetter IO a -> IO (a, LoveLetter)
-test game = do
-    loveLetterPlayers <- gatherPlayers
-    gen <- newStdGen
-    runLoveLetter (initialState gen loveLetterPlayers) game
+resetEverything = undefined
+
+loveLetter :: LoveLetterM m => m ()
+loveLetter = do
+    players' <- use players
+    let winThreshold = case length players' of
+                        2 -> 7
+                        3 -> 5
+                        4 -> 4
+    let gameIsWon = any (> winThreshold) $ NEL.map (^. tokens) players'
+    if gameIsWon
+        then pure ()
+        else do
+            playRound
+            resetEverything
+            loveLetter
 
 game :: IO ()
 game = do
     loveLetterPlayers <- gatherPlayers
     gen <- newStdGen
-    void $ runLoveLetter (initialState gen loveLetterPlayers) $ do
-        playRound `untilM_` gameIsWon
-        declareWinner
+    void $ runLoveLetter (initialState gen loveLetterPlayers) loveLetter

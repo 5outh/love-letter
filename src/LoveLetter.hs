@@ -103,12 +103,10 @@ emptyDeckWinner = do
 
             pure . Just $ case length ties of
                 1 -> winner
-                -- TODO what if a tie at this stage?
                 _ -> flip maximumBy roundPlayers $
                     comparing (\player ->
-                        handValue player
-                        + sum (map fromEnum (player ^. discardedCards))
-                        )
+                        sum (map fromEnum (player ^. discardedCards))
+                    )
         _ -> pure Nothing
 
 allEliminatedWinner :: LoveLetterM m => m (Maybe Player)
@@ -271,6 +269,9 @@ caughtWithCountess = undefined
 modifyPlayer :: LoveLetterM m => Player -> (Player -> Player) -> m ()
 modifyPlayer p f = round.players %= mapPlayer (p ^. name) f
 
+modifyGlobalPlayer :: LoveLetterM m => Player -> (Player -> Player) -> m ()
+modifyGlobalPlayer p f = globalPlayers %= mapPlayer (p ^. name) f
+
 discards :: LoveLetterM m => Player -> Card -> m ()
 player `discards` c = do
     liftIO $ renderDiscardedCard player c
@@ -284,8 +285,7 @@ player `discards` c = do
         Countess -> pure () -- "must discard the Countess if caught with King or Prince"
         Princess -> lose
 
-    modifyPlayer player $
-        \p -> p & discardedCards %~ (c:)
+    modifyPlayer player (discardedCards %~ (c:))
 
 othersWithoutProtection :: LoveLetterM m => m [Player]
 othersWithoutProtection = do
@@ -321,13 +321,8 @@ guessHand guessedCard p = p ^. card == Just guessedCard
 
 knockOut :: LoveLetterM m => Player -> m ()
 knockOut p = do
-    round.players %= NEL.fromList . NEL.filter (\player -> player ^. name /= p ^. name)
-    round.losers %= (p:)
-
-    liftIO . putStrLn $ p ^. name <> " has been knocked out of the round!"
-    liftIO . putStrLn $ "Remaining players:"
-
-    use (round.players) >>= mapM_ (liftIO . putStrLn . view name)
+    playersLeft <- use $ round.players
+    fire (PlayerKnockedOut p playersLeft)
 
 guessAnotherHand :: LoveLetterM m => m ()
 guessAnotherHand = do
@@ -426,13 +421,8 @@ declareRoundWinner winner = do
     -- NOTE this modifies the global reference to the player
     globalPlayers %= mapPlayer (winner ^. name) (\player ->
         player & tokens +~ 1)
-    
-    liftIO . putStrLn $ "The winner of this round is " 
-        <> winner ^. name
-        <> " with a "
-        <> showHand (winner ^. card)
-        <> " card"
-        <> "!"
+
+    fire (RoundWinnerAnnounced winner)
 
 showFinalScore :: NEL.NonEmpty Player -> IO ()
 showFinalScore ps = forM_ (NEL.sortBy (comparing (negate . _playerTokens)) ps) $ \p ->
@@ -450,11 +440,7 @@ declareWinner = do
                         3 -> 5
                         4 -> 4
     let winner = head $ NEL.filter (\p -> p ^. tokens >= winThreshold) players'
-    liftIO . putStrLn
-        $ "============== WINNER ANNOUNCEMENT: IMPORTANT LISTEN UP ==============="
-    liftIO . putStrLn $ "The winner of the game is "
-        <> winner ^. name
-        <> "! Congratulations!\n"
+    fire (GameWinnerAnnounced winner)
     liftIO $ showFinalScore players'
 
 loveLetter :: LoveLetterM m => m ()
@@ -470,6 +456,50 @@ loveLetter = do
         else do
             playRound
             loveLetter
+
+data LoveLetterEvent
+    = RoundWinnerAnnounced Player
+    | GameWinnerAnnounced Player
+    | PlayerKnockedOut Player (NEL.NonEmpty Player)
+
+fire :: LoveLetterM m => LoveLetterEvent -> m ()
+fire e = mapM_ ($e) handlers
+    where
+        handlers :: LoveLetterM m => [LoveLetterEvent -> m ()] 
+        handlers =
+            [ liftIO . loggingHandler
+            , playerHandler
+            ]
+
+playerHandler :: LoveLetterM m => LoveLetterEvent -> m ()
+playerHandler = \case
+    RoundWinnerAnnounced winner ->
+        modifyGlobalPlayer winner (tokens +~ 1)
+    PlayerKnockedOut player _ -> do
+        round.players
+            %= NEL.fromList
+            . NEL.filter (\p -> p ^. name /= player ^. name)
+        round.losers %= (player:)
+    _ -> pure ()
+
+loggingHandler :: LoveLetterEvent -> IO ()
+loggingHandler = \case
+    RoundWinnerAnnounced winner -> putStrLn $ "The winner of this round is " 
+        <> winner ^. name
+        <> " with a "
+        <> showHand (winner ^. card)
+        <> " card"
+        <> "!"
+    GameWinnerAnnounced winner -> do
+        putStrLn "============== WINNER ANNOUNCEMENT: IMPORTANT LISTEN UP ==============="
+        liftIO . putStrLn $ "The winner of the game is "
+            <> winner ^. name
+            <> "! Congratulations!\n"
+    PlayerKnockedOut player playersLeft -> do
+        liftIO . putStrLn $ player ^. name <> " has been knocked out of the round!"
+        liftIO . putStrLn $ "Remaining players:"
+
+        mapM_ (liftIO . putStrLn . view name) playersLeft
 
 game :: IO ()
 game = do

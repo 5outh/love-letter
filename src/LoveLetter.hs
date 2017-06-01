@@ -180,8 +180,6 @@ playRound = do
 
     roundPlayers <- use $ round.players
 
-    fire (PleaseLogMe (show roundPlayers))
-
     let playerCount = NEL.length roundPlayers
 
     shuffleCards
@@ -196,11 +194,6 @@ playRound = do
         modifyPlayer p (card .~ Just drawnCard)
 
     roundPlayers <- use $ round.players
-
-    fire (PleaseLogMe (show roundPlayers))
-
-    get >>= fire . PleaseLogMe . show
-    -- use round >>= fire . RoundBegins
 
     (playTurn >> nextPlayer) `untilM` roundIsWon
 
@@ -330,8 +323,14 @@ guessHand :: Card -> Player -> Bool
 guessHand guessedCard p = p ^. card == Just guessedCard
 
 knockOut :: LoveLetterM m => Player -> m ()
-knockOut p = do
+knockOut p = do    
+    round.players
+        %= NEL.fromList
+        . NEL.filter (\player -> p ^. name /= player ^. name)
+    round.losers %= (p:)
+
     playersLeft <- use $ round.players
+
     fire (PlayerKnockedOut p playersLeft)
 
 guessAnotherHand :: LoveLetterM m => m ()
@@ -467,20 +466,15 @@ fire e = mapM_ ($e) handlers
     where
         handlers :: LoveLetterM m => [LoveLetterEvent -> m ()] 
         handlers =
-            [ liftIO . loggingHandler
-            , playerHandler
+            [ playerHandler
+            , liftIO . loggingHandler
             ]
 
 playerHandler :: LoveLetterM m => LoveLetterEvent -> m ()
 playerHandler = \case
     RoundWonBy winner ->
         modifyGlobalPlayer winner (tokens +~ 1)
-    PlayerKnockedOut player _ -> do
-        round.players
-            %= NEL.fromList
-            . NEL.filter (\p -> p ^. name /= player ^. name)
-        round.losers %= (player:)
-    CardGuess card' guesser guessee ->
+    CardGuess card' _ guessee ->
         when (guessee ^. card == Just card')
             $ knockOut guessee
     _ -> pure ()

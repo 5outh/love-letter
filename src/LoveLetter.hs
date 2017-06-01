@@ -160,7 +160,7 @@ roundIsWon = do
 
 -- TODO: Does not match spec
 pickStartPlayer :: LoveLetterM m => m Player
-pickStartPlayer = rng . randomElement =<< use (globalPlayers.to NEL.tail)
+pickStartPlayer = rng . randomElement =<< use (globalPlayers.to NEL.toList)
 
 startingWith :: NEL.NonEmpty Player -> Player -> NEL.NonEmpty Player
 ps `startingWith` p =
@@ -170,16 +170,19 @@ ps `startingWith` p =
 playRound :: LoveLetterM m => m ()
 playRound = do
     round.number += 1
-    roundNumber <- use $ round.number
 
-    liftIO . putStrLn $ "######## ROUND " <> show roundNumber <> " ########"
+    currentRound <- use round
 
     loveLetterPlayers <- use globalPlayers
     startPlayer <- pickStartPlayer
 
     round.players .= loveLetterPlayers `startingWith` startPlayer
 
-    let playerCount = NEL.length loveLetterPlayers
+    roundPlayers <- use $ round.players
+
+    fire (PleaseLogMe (show roundPlayers))
+
+    let playerCount = NEL.length roundPlayers
 
     shuffleCards
     removeTopCard
@@ -190,12 +193,19 @@ playRound = do
     -- TODO This is a little weird, I'd like a pointer to `p`
     use (round.players) >>= \players' -> forM_ players' $ \p -> do
         drawnCard <- drawCard
-        currentPlayer.card .= Just drawnCard
-        nextPlayer
+        modifyPlayer p (card .~ Just drawnCard)
+
+    roundPlayers <- use $ round.players
+
+    fire (PleaseLogMe (show roundPlayers))
+
+    get >>= fire . PleaseLogMe . show
+    -- use round >>= fire . RoundBegins
 
     (playTurn >> nextPlayer) `untilM` roundIsWon
 
     mWinner <- roundWinner
+
     case mWinner of
         Nothing -> error "SOMETHING WENT WRONG! THERE SHOULD BE A WINNER."
         Just winner -> declareRoundWinner winner
@@ -360,8 +370,15 @@ discardHandWithoutEffect otherPlayer = do
         <> " discards a "
         <> showHand (otherPlayer ^. card)
         <> " without effect."
-    -- TODO Track discards
-    round.players %= mapPlayer (otherPlayer ^. name) (& card .~ Nothing)
+
+    case otherPlayer ^. card of
+        Nothing -> pure ()
+        Just card' -> do
+            modifyPlayer otherPlayer (discardedCards %~ (card':))
+            modifyPlayer otherPlayer (card .~ Nothing)
+    
+    knockOut otherPlayer
+
 
 drawNewCard :: LoveLetterM m => Player -> m ()
 drawNewCard p = do
@@ -399,12 +416,7 @@ lose = do
     knockOut currentPlayer'
 
 declareRoundWinner :: LoveLetterM m => Player -> m ()
-declareRoundWinner winner = do
-    -- NOTE this modifies the global reference to the player
-    globalPlayers %= mapPlayer (winner ^. name) (\player ->
-        player & tokens +~ 1)
-
-    fire (RoundWinnerAnnounced winner)
+declareRoundWinner = fire . RoundWinnerAnnounced
 
 showFinalScore :: NEL.NonEmpty Player -> IO ()
 showFinalScore ps = forM_ (NEL.sortBy (comparing (negate . _playerTokens)) ps) $ \p ->
@@ -440,13 +452,16 @@ loveLetter = do
             loveLetter
 
 data LoveLetterEvent
-    = RoundWinnerAnnounced Player
+    =
+      RoundBegins Round
+    | RoundWinnerAnnounced Player
     | GameWinnerAnnounced Player
     | PlayerKnockedOut Player (NEL.NonEmpty Player)
     | CardGuess
         Card
         Player -- ^ Guesser
         Player -- ^ Guessee
+    | PleaseLogMe String
 
 fire :: LoveLetterM m => LoveLetterEvent -> m ()
 fire e = mapM_ ($e) handlers
@@ -473,13 +488,20 @@ playerHandler = \case
 
 loggingHandler :: LoveLetterEvent -> IO ()
 loggingHandler = \case
+    RoundBegins round -> do
+        putStrLn 
+            $ "######## ROUND " <> show (round ^. number) <> " ########"
+        putStrLn
+            $ "[DEBUG] Current Players: "
+            <> show (round ^. players)
+        
     RoundWinnerAnnounced winner -> putStrLn $ "The winner of this round is " 
         <> winner ^. name
         <> " with a "
         <> showHand (winner ^. card)
         <> " card"
         <> "!"
-        
+
     GameWinnerAnnounced winner -> do
         putStrLn "============== WINNER ANNOUNCEMENT: IMPORTANT LISTEN UP ==============="
         liftIO . putStrLn $ "The winner of the game is "
@@ -508,6 +530,8 @@ loggingHandler = \case
                 putStrLn
                     $ guesser ^. name
                     <> " was wrong!"
+    PleaseLogMe x -> putStrLn $ "[PLEASE_LOG_ME] " <> x
+    _ -> pure ()
 
 game :: IO ()
 game = do

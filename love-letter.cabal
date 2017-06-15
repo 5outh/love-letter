@@ -2,12 +2,12 @@
 --
 -- see: https://github.com/sol/hpack
 
-name:           game-encoding
+name:           love-letter
 version:        0.1.0.0
 category:       Web
-homepage:       https://github.com/githubuser/game-encoding#readme
-author:         Author name here
-maintainer:     example@example.com
+homepage:       https://github.com/5outh/love-letter#readme
+author:         Benjamin Kovach
+maintainer:     bkovach13@gmail.com
 copyright:      2017 Author name here
 license:        BSD3
 license-file:   LICENSE
@@ -17,7 +17,7 @@ cabal-version:  >= 1.10
 extra-source-files:
     README.md
 
-executable game-encoding
+executable love-letter
   main-is: Main.hs
   hs-source-dirs:
       src

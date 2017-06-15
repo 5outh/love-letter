@@ -457,6 +457,7 @@ loveLetter = do
             playRound
             loveLetter
 
+-- I don't really like this event-based approach but it was a fun experiment
 data LoveLetterEvent
     = RoundBegins Round
     | RoundWonBy Player
@@ -531,7 +532,6 @@ loggingHandler = \case
                     $ guesser ^. name
                     <> " was wrong!"
     PleaseLogMe x -> putStrLn $ "[PLEASE_LOG_ME] " <> x
-    _ -> pure ()
 
 game :: IO ()
 game = do

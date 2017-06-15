@@ -1,11 +1,9 @@
-name:                game-encoding
+name:                love-letter 
 version:             0.1.0.0
-#synopsis:
-#description:
-homepage:            https://github.com/githubuser/game-encoding#readme
+homepage:            https://github.com/5outh/love-letter#readme
 license:             BSD3
-author:              Author name here
-maintainer:          example@example.com
+author:              Benjamin Kovach
+maintainer:          bkovach13@gmail.com 
 copyright:           2017 Author name here
 category:            Web
 extra-source-files:
@@ -31,6 +29,6 @@ default-extensions:
   - LambdaCase
 
 executables:
-  game-encoding:
+  love-letter:
     source-dirs:      src
     main:             Main.hs
